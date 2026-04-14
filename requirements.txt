@@ -1,0 +1,4 @@
+PySide6>=6.6
+requests>=2.31
+# Optional — install separately if you want the code-reuse scanner
+# mempalace
