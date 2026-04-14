@@ -104,45 +104,51 @@ class Agent:
                 yield AgentEvent("done", assistant_text)
                 return
 
-            messages.append({"role": "assistant", "content": assistant_text})
+            # Only honour the FIRST tool call per turn. Small models often
+            # hallucinate subsequent tool calls (and their fake results) in
+            # the same output — truncate to the first call so the model sees
+            # the REAL tool result before deciding what to do next.
+            first = tool_calls[0]
+            truncated = assistant_text[: first.end()]
+            messages.append({"role": "assistant", "content": truncated})
 
-            for match in tool_calls:
-                name = match.group(1)
-                raw_args = match.group(2)
-                signature = f"{name}::{raw_args.strip()}"
+            match = first
+            name = match.group(1)
+            raw_args = match.group(2)
+            signature = f"{name}::{raw_args.strip()}"
 
-                # Abort if the model keeps repeating an identical failing call.
-                if recent_calls and recent_calls[-1] == signature:
-                    msg = (
-                        f"Stopping: the model called {name} twice with the same arguments. "
-                        "The call keeps failing and further retries are unlikely to help."
+            # Abort if the model keeps repeating an identical failing call.
+            if recent_calls and recent_calls[-1] == signature:
+                msg = (
+                    f"Stopping: the model called {name} twice with the same arguments. "
+                    "The call keeps failing and further retries are unlikely to help."
+                )
+                yield AgentEvent("error", msg)
+                yield AgentEvent("done", "")
+                return
+            recent_calls.append(signature)
+
+            try:
+                args = json.loads(raw_args)
+            except json.JSONDecodeError as e:
+                result = ToolResult(False, f"Invalid JSON args: {e}")
+            else:
+                tool = allowed.get(name)
+                if tool is None:
+                    result = ToolResult(
+                        False,
+                        f"Tool '{name}' not available in {mode.label} mode. Available: {list(allowed)}",
                     )
-                    yield AgentEvent("error", msg)
-                    yield AgentEvent("done", "")
-                    return
-                recent_calls.append(signature)
-
-                try:
-                    args = json.loads(raw_args)
-                except json.JSONDecodeError as e:
-                    result = ToolResult(False, f"Invalid JSON args: {e}")
                 else:
-                    tool = allowed.get(name)
-                    if tool is None:
-                        result = ToolResult(
-                            False,
-                            f"Tool '{name}' not available in {mode.label} mode. Available: {list(allowed)}",
-                        )
-                    else:
-                        yield AgentEvent("tool_call", f"{name} {raw_args[:200]}")
-                        try:
-                            result = tool.run(args, self.workspace, self.approve)
-                        except Exception as e:
-                            result = ToolResult(False, f"Tool crashed: {e}")
+                    yield AgentEvent("tool_call", f"{name} {raw_args[:200]}")
+                    try:
+                        result = tool.run(args, self.workspace, self.approve)
+                    except Exception as e:
+                        result = ToolResult(False, f"Tool crashed: {e}")
 
-                status = "OK" if result.ok else "ERROR"
-                feedback = f"[tool {name} {status}]\n{result.output}"
-                yield AgentEvent("tool_result", feedback)
-                messages.append({"role": "user", "content": feedback})
+            status = "OK" if result.ok else "ERROR"
+            feedback = f"[tool {name} {status}]\n{result.output}"
+            yield AgentEvent("tool_result", feedback)
+            messages.append({"role": "user", "content": feedback})
 
         yield AgentEvent("done", "[max steps reached — stopping]")
