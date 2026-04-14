@@ -31,7 +31,10 @@ def stream_chat(
         "options": options or {},
     }
     try:
-        with requests.post(url, json=payload, stream=True, timeout=(10, 600)) as r:
+        # (connect_timeout, read_timeout) — read timeout is per-chunk, not total.
+        # Streaming tokens from Ollama resets the timer each chunk, so 120 s
+        # between chunks is plenty even on slow CPU inference.
+        with requests.post(url, json=payload, stream=True, timeout=(10, 120)) as r:
             if r.status_code != 200:
                 raise OllamaError(f"HTTP {r.status_code}: {r.text[:400]}")
             for raw in r.iter_lines(decode_unicode=True):

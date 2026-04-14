@@ -10,7 +10,8 @@ import requests
 from anvil.tools.base import ToolResult
 
 
-MAX_BYTES = 300_000
+MAX_BYTES = 300_000           # raw HTML budget before stripping
+MAX_TEXT_OUT = 20_000         # what we actually return to the model
 UA = "Mozilla/5.0 (compatible; Anvil/0.1)"
 
 
@@ -30,7 +31,10 @@ class FetchUrlTool:
             if r.status_code != 200:
                 return ToolResult(False, f"HTTP {r.status_code}")
             content = r.text[:MAX_BYTES]
-            text = _html_to_text(content) if "html" in r.headers.get("content-type", "").lower() else content
+            is_html = "html" in r.headers.get("content-type", "").lower()
+            text = _html_to_text(content) if is_html else content
+            if len(text) > MAX_TEXT_OUT:
+                text = text[:MAX_TEXT_OUT] + f"\n\n[... truncated, {len(text) - MAX_TEXT_OUT} chars omitted]"
             return ToolResult(True, text)
         except requests.RequestException as e:
             return ToolResult(False, f"Fetch error: {e}")
