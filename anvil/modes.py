@@ -14,17 +14,26 @@ class Mode:
 
 
 TOOL_INSTRUCTIONS_TEMPLATE = """
-You can use tools to take actions on the user's PC. To use a tool, output a single block in this exact format:
+You can use tools to take actions on the user's PC. To call a tool, output a single block in this exact format:
 
 <tool name="TOOL_NAME">
-{"arg1": "value1", "arg2": "value2"}
+{"REAL_ARG_NAME": "value"}
 </tool>
 
-After you emit a tool call, STOP. The system will execute the tool and give you the result in the next turn. Then continue with more tools or your final answer.
+RULES FOR TOOL CALLS — READ CAREFULLY:
+1. Use the EXACT argument names shown in each tool's description below. Do NOT invent names like "arg1", "arg2", "input" — those are placeholders, not real keys.
+2. After emitting the <tool>...</tool> block, STOP generating. Do not write a Summary yet. The system will run the tool and send you the result in the next turn.
+3. If a previous tool call ERRORED with "Missing X argument", your JSON was missing that exact key. Re-read the tool description below and use the correct key name.
+4. Do NOT repeat the same failing tool call. If a call errors, fix the argument names or give up and answer without the tool.
 
-When you are done, reply with a short, clear SUMMARY of what you did and what the user should know. Do not include tool call blocks in the summary.
+Concrete example (for a tool whose description says 'Args: {"url": "..."}'):
+<tool name="fetch_url">
+{"url": "https://example.com"}
+</tool>
 
-Available tools for this mode:
+When you are fully done, reply with a short, clear SUMMARY of what you did. Do not include tool call blocks in the summary.
+
+Available tools for this mode (use these exact argument keys):
 __TOOL_LIST__
 """.strip()
 

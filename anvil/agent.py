@@ -67,6 +67,8 @@ class Agent:
         messages.extend(history)
         messages.append({"role": "user", "content": user_message})
 
+        recent_calls: list[str] = []
+
         for step in range(MAX_AGENT_STEPS):
             try:
                 assistant_text = ""
@@ -87,6 +89,19 @@ class Agent:
             for match in tool_calls:
                 name = match.group(1)
                 raw_args = match.group(2)
+                signature = f"{name}::{raw_args.strip()}"
+
+                # Abort if the model keeps repeating an identical failing call.
+                if recent_calls[-2:] == [signature, signature]:
+                    msg = (
+                        f"Stopping: the model called {name} with the same arguments three times in a row. "
+                        "The call keeps failing and further retries are unlikely to help."
+                    )
+                    yield AgentEvent("error", msg)
+                    yield AgentEvent("done", "")
+                    return
+                recent_calls.append(signature)
+
                 try:
                     args = json.loads(raw_args)
                 except json.JSONDecodeError as e:
