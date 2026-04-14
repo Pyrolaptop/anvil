@@ -34,42 +34,44 @@ class SearchCodeTool:
 
 
 def _mempalace_search(query: str) -> str | None:
+    """Invoke `python -m mempalace search` and capture the output.
+
+    Returns None if MemPalace isn't installed/configured, so we fall back to grep.
+    """
     try:
-        import mempalace  # type: ignore
+        import mempalace  # noqa: F401
     except ImportError:
         return None
 
-    # MemPalace Python API is still evolving; try common entry points.
-    for candidate in ("search", "query", "recall"):
-        fn = getattr(mempalace, candidate, None)
-        if callable(fn):
-            try:
-                res = fn(query, limit=MAX_MATCHES)
-                return _format_mempalace(res)
-            except TypeError:
-                try:
-                    res = fn(query)
-                    return _format_mempalace(res)
-                except Exception:
-                    continue
-            except Exception:
-                continue
-    return None
+    import os
+    import sys
+    import subprocess
 
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "mempalace", "search", query,
+             "--results", str(MAX_MATCHES)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            env=env,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
 
-def _format_mempalace(res) -> str:
-    if not res:
+    out = (result.stdout or "").strip()
+    err = (result.stderr or "").strip()
+    if not out and "No results" in err:
         return "(MemPalace returned no matches)"
-    lines = ["[MemPalace index]"]
-    items = res if isinstance(res, list) else [res]
-    for item in items[:MAX_MATCHES]:
-        if isinstance(item, dict):
-            src = item.get("path") or item.get("source") or "?"
-            snippet = (item.get("text") or item.get("content") or "").strip()[:MAX_SNIPPET]
-            lines.append(f"\n--- {src} ---\n{snippet}")
-        else:
-            lines.append(str(item)[:MAX_SNIPPET])
-    return "\n".join(lines)
+    if result.returncode != 0 and not out:
+        return None  # fall back to grep
+    if not out:
+        return "(MemPalace returned no matches)"
+    return f"[MemPalace index]\n{out[:8000]}"
 
 
 def _grep_search(query: str) -> str:

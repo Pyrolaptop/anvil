@@ -142,7 +142,20 @@ The agent intercepts these, runs the tool, feeds the result back, and continues.
 
 ## Setup log
 
-- **2026-04-14** — Initial scaffold created. Folder initialised, README written up-front per project rules.
+- **2026-04-14**
+  - Initial scaffold created. Folder initialised, README written up-front per project rules.
+  - PySide6 6.11 + `requests` installed via `pip install -r requirements.txt`.
+  - Ollama host detected on port **11435** (non-default). `config.py` defaults to that; set `OLLAMA_HOST` env var to override.
+  - Models used: `phi3:mini` (ideas + general), `gemma3:1b` (auto router), `qwen2.5-coder:3b` (coding) — last pulled via `ollama pull`.
+  - Repo published at https://github.com/Pyrolaptop/anvil (public, main branch).
+  - MemPalace 3.2.0 installed via `pip install mempalace`. Initialised with `python -m mempalace init C:\Users\MattL\LocalProjects --yes`. Initial mine running in background.
+  - Code-reuse tool uses `python -m mempalace search <query>` as a subprocess (MemPalace has no public Python search API yet); falls back to a grep scan if MemPalace is absent or returns no hits.
+
+## Troubleshooting log
+
+- **Ollama unreachable on port 11434** — this Windows install binds `127.0.0.1:11435` instead. Fixed by defaulting `OLLAMA_HOST` to `http://localhost:11435` in `anvil/config.py`. Override with env var if yours is different.
+- **`str.format()` KeyError in tool instructions** — the tool-call template contains literal `{"arg1": "value1"}` JSON, which Python's `.format()` tries to interpret as a named field. Fixed by switching to a simple `__TOOL_LIST__` placeholder + `str.replace()`.
+- **`mempalace init` hangs on stdin** — interactive by default; use `--yes` for non-interactive runs. The CLI also fails to print its help on Windows cp1252 due to a Unicode arrow; set `PYTHONIOENCODING=utf-8` when invoking via subprocess.
 
 ## Useful commands
 
