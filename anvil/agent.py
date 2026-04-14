@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Callable
@@ -17,7 +18,7 @@ TOOL_BLOCK_RE = re.compile(
     r'<tool\s+name="([^"]+)"\s*>\s*(\{[\s\S]*?\})\s*</tool>',
     re.IGNORECASE,
 )
-MAX_AGENT_STEPS = 8
+MAX_AGENT_STEPS = 5
 
 
 @dataclass
@@ -27,13 +28,22 @@ class AgentEvent:
 
 
 class Agent:
-    def __init__(self, workspace: Workspace, approve: Callable[[ConfirmationRequest], bool]):
+    def __init__(
+        self,
+        workspace: Workspace,
+        approve: Callable[[ConfirmationRequest], bool],
+        stop_event: threading.Event | None = None,
+    ):
         self.workspace = workspace
         self.approve = approve
+        self.stop_event = stop_event or threading.Event()
         self.tools: dict[str, Tool] = build_registry()
 
     def _tool_descriptions(self) -> dict[str, str]:
         return {name: t.description for name, t in self.tools.items()}
+
+    def _cancelled(self) -> bool:
+        return self.stop_event.is_set()
 
     def route_auto(self, user_message: str) -> str:
         """Use the router model to pick a real mode."""
@@ -42,7 +52,7 @@ class Agent:
             {"role": "system", "content": router.system_prompt},
             {"role": "user", "content": user_message},
         ]
-        reply = "".join(stream_chat(router.model, messages)).strip().lower()
+        reply = "".join(stream_chat(router.model, messages, stop_event=self.stop_event)).strip().lower()
         for key in ("coding", "ideas", "general"):
             if key in reply:
                 return key
@@ -52,6 +62,9 @@ class Agent:
         if mode_key == "auto":
             try:
                 target = self.route_auto(user_message)
+                if self._cancelled():
+                    yield AgentEvent("error", "Stopped by user.")
+                    return
                 yield AgentEvent("mode_routed", target)
                 mode_key = target
             except OllamaError as e:
@@ -70,13 +83,20 @@ class Agent:
         recent_calls: list[str] = []
 
         for step in range(MAX_AGENT_STEPS):
+            if self._cancelled():
+                yield AgentEvent("error", "Stopped by user.")
+                return
             try:
                 assistant_text = ""
-                for token in stream_chat(mode.model, messages):
+                for token in stream_chat(mode.model, messages, stop_event=self.stop_event):
                     assistant_text += token
                     yield AgentEvent("token", token)
             except OllamaError as e:
                 yield AgentEvent("error", str(e))
+                return
+
+            if self._cancelled():
+                yield AgentEvent("error", "Stopped by user.")
                 return
 
             tool_calls = list(TOOL_BLOCK_RE.finditer(assistant_text))
@@ -92,9 +112,9 @@ class Agent:
                 signature = f"{name}::{raw_args.strip()}"
 
                 # Abort if the model keeps repeating an identical failing call.
-                if recent_calls[-2:] == [signature, signature]:
+                if recent_calls and recent_calls[-1] == signature:
                     msg = (
-                        f"Stopping: the model called {name} with the same arguments three times in a row. "
+                        f"Stopping: the model called {name} twice with the same arguments. "
                         "The call keeps failing and further retries are unlikely to help."
                     )
                     yield AgentEvent("error", msg)

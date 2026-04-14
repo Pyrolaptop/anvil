@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Iterator
 
 import requests
@@ -19,8 +20,9 @@ def stream_chat(
     *,
     host: str = OLLAMA_HOST,
     options: dict | None = None,
+    stop_event: threading.Event | None = None,
 ) -> Iterator[str]:
-    """Yield response chunks from Ollama /api/chat."""
+    """Yield response chunks from Ollama /api/chat. Aborts promptly if stop_event is set."""
     url = f"{host}/api/chat"
     payload = {
         "model": model,
@@ -33,6 +35,9 @@ def stream_chat(
             if r.status_code != 200:
                 raise OllamaError(f"HTTP {r.status_code}: {r.text[:400]}")
             for raw in r.iter_lines(decode_unicode=True):
+                if stop_event is not None and stop_event.is_set():
+                    r.close()
+                    return
                 if not raw:
                     continue
                 try:

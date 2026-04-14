@@ -42,12 +42,16 @@ class AgentWorker(QObject):
         self.history = history
         self._confirm_event = threading.Event()
         self._confirm_result = False
+        self.stop_event = threading.Event()
 
     def approve(self, request: ConfirmationRequest) -> bool:
         self._confirm_event.clear()
         self._confirm_result = False
         self.confirm_needed.emit(request)
-        self._confirm_event.wait()
+        # Wake periodically so a Stop click unblocks a pending confirmation.
+        while not self._confirm_event.wait(0.25):
+            if self.stop_event.is_set():
+                return False
         return self._confirm_result
 
     @Slot(bool)
@@ -56,9 +60,16 @@ class AgentWorker(QObject):
         self._confirm_event.set()
 
     @Slot()
+    def request_stop(self):
+        self.stop_event.set()
+        # Also unblock any pending confirmation wait
+        self._confirm_result = False
+        self._confirm_event.set()
+
+    @Slot()
     def run(self):
         try:
-            agent = self.agent_factory(self.approve)
+            agent = self.agent_factory(self.approve, self.stop_event)
             for ev in agent.run(self.mode_key, self.message, self.history):
                 self.event.emit(ev)
         finally:
@@ -119,11 +130,19 @@ class MainWindow(QMainWindow):
         self.input.setFixedHeight(90)
         self.input.setStyleSheet("background: #0b1220; border: 1px solid #1e293b; border-radius: 6px; padding: 6px;")
         bottom.addWidget(self.input, 1)
+        btn_col = QVBoxLayout()
         self.send_btn = QPushButton("Send")
         self.send_btn.setFixedWidth(90)
         self.send_btn.setStyleSheet("background: #2563eb; color: white; padding: 8px; border-radius: 4px;")
         self.send_btn.clicked.connect(self.send)
-        bottom.addWidget(self.send_btn)
+        btn_col.addWidget(self.send_btn)
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setFixedWidth(90)
+        self.stop_btn.setStyleSheet("background: #b91c1c; color: white; padding: 8px; border-radius: 4px;")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self.stop_agent)
+        btn_col.addWidget(self.stop_btn)
+        bottom.addLayout(btn_col)
         layout.addLayout(bottom)
 
         self.setStatusBar(QStatusBar())
@@ -169,10 +188,11 @@ class MainWindow(QMainWindow):
         self.input.clear()
         self.chat.add_user(message)
         self.send_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
         self.statusBar().showMessage(f"Running in {MODES[mode_key].label} mode…")
 
-        def agent_factory(approve):
-            return Agent(workspace, approve=approve)
+        def agent_factory(approve, stop_event):
+            return Agent(workspace, approve=approve, stop_event=stop_event)
 
         self._thread = QThread()
         self._worker = AgentWorker(agent_factory, mode_key, message, list(self.history))
@@ -220,8 +240,16 @@ class MainWindow(QMainWindow):
             self.chat.end_assistant()
 
     @Slot()
+    def stop_agent(self):
+        if self._worker is not None:
+            self._worker.request_stop()
+            self.stop_btn.setEnabled(False)
+            self.statusBar().showMessage("Stopping…")
+
+    @Slot()
     def on_finished(self):
         self.send_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         self.statusBar().showMessage("Ready")
         # Only store the last user + final assistant text in history (keeps context small)
         if hasattr(self, "_pending_user_msg") and self._assistant_accumulator.strip():
